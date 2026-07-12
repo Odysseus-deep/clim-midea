@@ -11,6 +11,8 @@ your LAN (Raspberry Pi, Mac mini, NUC), reachable from anywhere over
 
 Named after Aeolus (Αἴολος), keeper of the winds in the Odyssey.
 
+![Dashboard](docs/dashboard.png)
+
 ## Story
 
 This started during a French heatwave. I had just bought a Midea split AC, and the
@@ -36,6 +38,17 @@ Tailscale, no cloud involved.
 - HomeKit: shows up in the Home app, works with Siri, shareable with the household.
 - Resilient: survives the AC being unplugged, the router rebooting, or the IP
   changing (auto re-discovery). Never records phantom samples.
+
+The hysteresis view aggregates power by distance from setpoint, so it stays readable
+over any span. On an inverter that modulates, the cooling and warming branches
+separate by how hard it is working:
+
+![Power vs distance from setpoint](docs/hysteresis.png)
+
+The command journal shows every change with its source, including ones made from the
+physical remote or the Midea app (detected by watching the state, not our API):
+
+![Command journal](docs/journal.png)
 
 ## Requirements
 
