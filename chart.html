@@ -215,7 +215,7 @@
 
   <div class="card">
     <h2>Temperatures</h2>
-    <p class="desc">The shaded area is the gap the AC has to bridge between the room and outside.</p>
+    <p class="desc" id="temp-desc">The shaded area is the gap the AC has to bridge between the room and outside.</p>
     <div class="legend">
       <span><i class="swatch" style="background:var(--indoor)"></i>Indoor</span>
       <span><i class="swatch" style="background:var(--outdoor)"></i>Outdoor</span>
@@ -279,6 +279,26 @@ let customRange = null;
 const xDomain = () => customRange ?? [windowEnd - hours * 3600, windowEnd];
 const svgEl = (n, a = {}) => { const e = document.createElementNS("http://www.w3.org/2000/svg", n); for (const k in a) e.setAttribute(k, a[k]); return e; };
 
+// Location for the sun-height overlay, from /config. null = no sun drawn.
+let geo = null;
+
+// Solar elevation in degrees above the horizon, for a given epoch (ms) and place.
+// Low-precision NOAA formula: good to a fraction of a degree, no network needed.
+function sunElevation(ms, lat, lon) {
+  const rad = Math.PI / 180;
+  const n = ms / 86400000 + 2440587.5 - 2451545.0;  // days since J2000
+  const L = (280.460 + 0.9856474 * n) % 360;
+  const g = (357.528 + 0.9856003 * n) % 360;
+  const lambda = L + 1.915 * Math.sin(g * rad) + 0.020 * Math.sin(2 * g * rad);
+  const eps = 23.439 - 0.0000004 * n;
+  const delta = Math.asin(Math.sin(eps * rad) * Math.sin(lambda * rad)) / rad;
+  const gmst = (280.46061837 + 360.98564736629 * n) % 360;
+  const alpha = Math.atan2(Math.cos(eps * rad) * Math.sin(lambda * rad), Math.cos(lambda * rad)) / rad;
+  const hourAngle = (gmst + lon - alpha) % 360;
+  return Math.asin(Math.sin(lat * rad) * Math.sin(delta * rad)
+    + Math.cos(lat * rad) * Math.cos(delta * rad) * Math.cos(hourAngle * rad)) / rad;
+}
+
 function scale(d0, d1, r0, r1) {
   if (d1 - d0 === 0) return () => (r0 + r1) / 2;
   return (v) => r0 + (v - d0) / (d1 - d0) * (r1 - r0);
@@ -338,6 +358,22 @@ function drawTemp() {
   const xs = scale(t0, t1, M.left, W - M.right), ys = scale(lo, hi, H - M.bottom, M.top);
   const svg = frame(host, { xs, ys, xTicks: niceTicks(t0, t1, 5), yTicks: niceTicks(lo, hi, 5),
     xFmt: xFmt(), yFmt: v => v.toFixed(0) + "°" });
+
+  // Sun height as a golden background wash: brightness tracks the sun's elevation,
+  // dark at night. Not a second axis, just ambient daylight. You can see outdoor
+  // temperature peak a couple of hours after the brightest part of the day.
+  if (geo) {
+    const NB = 120, plotH = H - M.bottom - M.top;
+    for (let i = 0; i < NB; i++) {
+      const ta = t0 + (t1 - t0) * i / NB, tb = t0 + (t1 - t0) * (i + 1) / NB;
+      const e = sunElevation((ta + tb) / 2 * 1000, geo.lat, geo.lon);
+      if (e <= 0) continue;
+      svg.appendChild(svgEl("rect", { x: xs(ta), y: M.top, width: Math.max(0.5, xs(tb) - xs(ta)),
+        height: plotH, fill: "#f2b134", opacity: 0.18 * Math.min(1, e / 65) }));
+    }
+    $("#temp-desc").textContent = "The shaded area is the gap the AC has to bridge "
+      + "between the room and outside. The golden background is the sun's height.";
+  }
 
   // Area between the two curves: the gap the AC fights.
   const both = pts.filter(s => s.outdoor != null);
@@ -923,6 +959,10 @@ $("#filters").addEventListener("click", (e) => {
 window.addEventListener("resize", () => { drawTemp(); drawPower(); drawHyst(); });
 
 if (customRange) $("#zoom-reset").style.display = "";  // opened via a #zoom link
+// Sun overlay: only if the server has a location configured.
+fetch("/config").then(r => r.json()).then(c => {
+  if (c && c.lat != null && c.lon != null) { geo = c; if (samples.length) drawTemp(); }
+}).catch(() => {});
 refreshState();
 load();
 loadCommands();

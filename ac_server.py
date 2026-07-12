@@ -46,6 +46,18 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_optfloat(name: str) -> float | None:
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return None
+
+
+# Location, only for the sun-height overlay on the temperature chart. Optional.
+AC_LAT = _env_optfloat("AC_LAT")
+AC_LON = _env_optfloat("AC_LON")
+
+
 # Overridable via env, mostly to exercise failure recovery without waiting minutes.
 TIMEOUT = _env_float("AC_TIMEOUT", 12.0)          # AC answers in 1-3s; past that, dead session
 SAMPLE_INTERVAL = _env_float("AC_SAMPLE_INTERVAL", 60.0)
@@ -548,6 +560,12 @@ async def status():
 @app.get("/capabilities")
 async def capabilities():
     return _capabilities()
+
+
+@app.get("/config")
+async def config():
+    # Non-AC config for the dashboard. lat/lon drive the sun-height overlay.
+    return {"lat": AC_LAT, "lon": AC_LON}
 
 
 class Settings(BaseModel):
