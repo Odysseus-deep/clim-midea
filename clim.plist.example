@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS LaunchAgent: starts the service at login, restarts it if it dies.
+
+  1. Replace the <PLACEHOLDERS> below.
+  2. cp clim.plist.example ~/Library/LaunchAgents/com.example.clim.plist
+  3. launchctl load ~/Library/LaunchAgents/com.example.clim.plist
+
+  <BIND_HOST>: the IP to serve on.
+    127.0.0.1        local only
+    a Tailscale IP   your tailnet only, not the LAN or internet
+    0.0.0.0          the whole LAN (no auth, avoid this)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.clim</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string><PROJECT_PATH>/.venv/bin/uvicorn</string>
+        <string>ac_server:app</string>
+        <string>--host</string>
+        <string><BIND_HOST></string>
+        <string>--port</string>
+        <string>8787</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string><PROJECT_PATH></string>
+
+    <!-- Optional: database on another volume (falls back to local if missing). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AC_DB_PATH</key>
+        <string><PROJECT_PATH>/clim.db</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string><PROJECT_PATH>/clim.log</string>
+    <key>StandardErrorPath</key>
+    <string><PROJECT_PATH>/clim.log</string>
+</dict>
+</plist>

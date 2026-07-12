@@ -1,0 +1,22 @@
+# Secrets and device identity. Never publish these.
+.env
+homekit.state          # HomeKit pairing crypto keys
+state.json             # last known AC IP
+*.state
+
+# Local data and logs
+clim.db
+clim.db-wal
+clim.db-shm
+*.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Personal LaunchAgent (hardcoded paths/IP). See clim.plist.example
+com.odysseus.clim.plist
+
+# macOS
+.DS_Store

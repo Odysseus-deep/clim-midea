@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Αἴολος</title>
+<style>
+  :root {
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --indoor: #2a78d6;
+    --outdoor: #eb6834;
+    --power: #4a3aa7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255,255,255,0.10);
+      --indoor: #3987e5;
+      --outdoor: #d95926;
+      --power: #9085e9;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--page); color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  /* The title is polytonic Greek; name fonts that actually cover it. */
+  h1 {
+    font-size: 20px; font-weight: 600; margin: 0 0 2px;
+    font-family: system-ui, -apple-system, "Helvetica Neue", "Lucida Grande", "Segoe UI", sans-serif;
+  }
+  .sub { color: var(--text-secondary); margin: 0 0 20px; }
+
+  .filters { display: flex; gap: 6px; margin-bottom: 20px; flex-wrap: wrap; }
+  .filters button {
+    font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    background: var(--surface-1); color: var(--text-secondary);
+    border: 1px solid var(--border);
+  }
+  .filters button[aria-pressed="true"] {
+    color: var(--text-primary); font-weight: 600; border-color: var(--axis);
+  }
+
+  /* control panel */
+  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .panel-top { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 14px; }
+  .power {
+    font: inherit; font-weight: 600; padding: 10px 20px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--axis); background: var(--surface-1); color: var(--text-primary); min-width: 118px;
+  }
+  .power[data-on="true"] { background: var(--indoor); border-color: var(--indoor); color: #fff; }
+
+  .stepper { display: flex; align-items: center; gap: 10px; }
+  .stepper button {
+    font: inherit; font-size: 18px; line-height: 1; width: 38px; height: 38px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  }
+  .stepper .temp { font-size: 24px; font-weight: 600; min-width: 76px; text-align: center; }
+  .stepper .temp span { font-size: 14px; font-weight: 400; color: var(--text-secondary); }
+
+  .segmented { display: flex; gap: 4px; flex-wrap: wrap; }
+  .segmented button {
+    font: inherit; font-size: 13px; padding: 6px 11px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+  }
+  .segmented button[aria-pressed="true"] { color: var(--text-primary); font-weight: 600; border-color: var(--axis); }
+
+  .row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  .row > .rlabel { font-size: 12px; color: var(--text-secondary); min-width: 92px; }
+
+  .toggles { display: flex; gap: 6px; flex-wrap: wrap; }
+  .toggles button {
+    font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+    display: inline-flex; align-items: center; gap: 7px; min-height: 34px;
+  }
+  .toggles button[aria-pressed="true"] { color: var(--text-primary); font-weight: 600; border-color: var(--axis); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--axis); }
+  .toggles button[aria-pressed="true"] .dot { background: var(--indoor); }
+
+  .panel.busy { opacity: .5; pointer-events: none; }
+  .panel-msg { font-size: 12px; margin-top: 10px; min-height: 16px; color: var(--text-secondary); }
+  .panel-msg.err { color: #d03b3b; }
+  .off-note { font-size: 12px; color: var(--muted); }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tile .label { color: var(--text-secondary); font-size: 12px; margin-bottom: 4px; }
+  .tile .value { font-size: 26px; font-weight: 600; line-height: 1.15; }
+  .tile .unit { font-size: 14px; font-weight: 400; color: var(--text-secondary); }
+  .tile .note { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  .card .desc { font-size: 12px; color: var(--text-secondary); margin: 0 0 12px; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .grid-line { stroke: var(--grid); stroke-width: 1; }
+  .axis-line { stroke: var(--axis); stroke-width: 1; }
+  .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .series { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .dlabel { font-size: 11px; font-weight: 600; }
+
+  .tooltip {
+    position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.14); z-index: 10; min-width: 140px;
+  }
+  .tooltip .tt-time { color: var(--text-secondary); margin-bottom: 4px; }
+  .tooltip .tt-row { display: flex; justify-content: space-between; gap: 14px; }
+  .tooltip .tt-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 12px; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; }
+
+  .empty { color: var(--muted); font-size: 13px; padding: 28px 0; text-align: center; }
+  .stale { opacity: .45; }
+
+  /* command journal */
+  .journal { display: flex; flex-direction: column; }
+  .jrow {
+    display: flex; align-items: baseline; gap: 14px; padding: 11px 0;
+    border-bottom: 1px solid var(--grid);
+  }
+  .jrow:last-child { border-bottom: 0; }
+  .jrow:first-child .jchip { box-shadow: 0 0 0 1px var(--axis) inset; }
+  .jwhen { min-width: 116px; flex-shrink: 0; }
+  .jwhen .rel { font-weight: 600; }
+  .jwhen .abs { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .jwho { min-width: 132px; flex-shrink: 0; color: var(--text-secondary); font-size: 13px;
+    display: inline-flex; align-items: center; gap: 6px; }
+  .jwho .who-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .jchanges { display: flex; gap: 6px; flex-wrap: wrap; }
+  .jchip {
+    font-size: 12px; padding: 4px 9px; border-radius: 6px;
+    background: var(--page); border: 1px solid var(--border); white-space: nowrap;
+  }
+  .jchip b { font-weight: 600; }
+  .jchip .arrow { color: var(--muted); margin: 0 4px; }
+  .jchip.on { color: var(--indoor); }
+  .jchip.off { color: var(--text-secondary); }
+  .jchip .cdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; margin-right: 5px; vertical-align: middle; }
+  @media (max-width: 620px) {
+    .jrow { flex-direction: column; gap: 6px; }
+    .jwhen, .jwho { min-width: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Αἴολος</h1>
+  <p class="sub" id="subtitle">Loading...</p>
+
+  <div class="panel" id="panel">
+    <div class="panel-top">
+      <button class="power" id="power">...</button>
+      <div class="stepper">
+        <button id="temp-down" aria-label="Lower the setpoint">-</button>
+        <div class="temp" id="temp">--<span> &deg;C</span></div>
+        <button id="temp-up" aria-label="Raise the setpoint">+</button>
+      </div>
+      <div class="off-note" id="off-note"></div>
+    </div>
+    <div class="row"><span class="rlabel">Mode</span><div class="segmented" id="modes"></div></div>
+    <div class="row"><span class="rlabel">Fan</span><div class="segmented" id="fans"></div></div>
+    <div class="row" id="rate-row"><span class="rlabel">Max power</span><div class="segmented" id="rates"></div></div>
+    <div class="row"><span class="rlabel">Options</span><div class="toggles" id="toggles"></div></div>
+    <div class="off-note" id="isense"></div>
+    <div class="panel-msg" id="panel-msg"></div>
+  </div>
+
+  <div class="filters" id="filters">
+    <button data-hours="1">1h</button>
+    <button data-hours="6">6h</button>
+    <button data-hours="24" aria-pressed="true">24h</button>
+    <button data-hours="168">7d</button>
+    <button data-hours="720">30d</button>
+    <button id="zoom-reset" style="display:none">x zoom</button>
+  </div>
+  <p class="sub" id="hint" style="margin:-12px 0 20px; font-size:12px;">Drag on a chart to zoom into a period.</p>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <h2>Temperatures</h2>
+    <p class="desc">The shaded area is the gap the AC has to bridge between the room and outside.</p>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--indoor)"></i>Indoor</span>
+      <span><i class="swatch" style="background:var(--outdoor)"></i>Outdoor</span>
+      <span><i class="swatch" style="background:var(--muted)"></i>Setpoint</span>
+    </div>
+    <div id="chart-temp"></div>
+  </div>
+
+  <div class="card">
+    <h2>Power draw</h2>
+    <p class="desc" id="power-desc">Same time axis as the temperatures.</p>
+    <div id="chart-power"></div>
+  </div>
+
+  <div class="card">
+    <h2>Power vs distance from setpoint</h2>
+    <p class="desc" id="hyst-desc"></p>
+    <div class="legend" id="hyst-legend">
+      <span><i class="swatch" style="background:var(--indoor)"></i>cooling</span>
+      <span><i class="swatch" style="background:var(--outdoor)"></i>warming</span>
+      <span><i class="swatch" style="background:var(--power)"></i>median, 25-75 band</span>
+    </div>
+    <div id="chart-hyst"></div>
+  </div>
+
+  <div class="card">
+    <h2>Command journal</h2>
+    <p class="desc">Every setting sent to the AC, with its source. Only commands that actually changed something show up.</p>
+    <div class="journal" id="journal"></div>
+  </div>
+
+  <div class="card">
+    <h2>Samples</h2>
+    <p class="desc">The same data, readable without color.</p>
+    <details>
+      <summary>Show table</summary>
+      <div id="table" style="max-height:400px;overflow:auto"></div>
+    </details>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const W = 900, H = 240, M = { top: 14, right: 52, bottom: 28, left: 44 };
+const $ = (s) => document.querySelector(s);
+const tooltip = $("#tooltip");
+let hours = 24, samples = [], hyst = null;
+
+const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+const fmtDate = (ts) => new Date(ts * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+const fmtDay = (ts) => new Date(ts * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+// Past a day, the time alone no longer locates anything.
+const xFmt = () => (hours > 24 ? fmtDay : fmtTime);
+
+// The axis spans the requested window, not the data extent: otherwise 30 min of
+// history would draw the same on "1h" and on "30d".
+let windowEnd = Math.floor(Date.now() / 1000);
+// Drag-to-zoom selection: [t0, t1] epoch, or null for the normal window.
+let customRange = null;
+const xDomain = () => customRange ?? [windowEnd - hours * 3600, windowEnd];
+const svgEl = (n, a = {}) => { const e = document.createElementNS("http://www.w3.org/2000/svg", n); for (const k in a) e.setAttribute(k, a[k]); return e; };
+
+function scale(d0, d1, r0, r1) {
+  if (d1 - d0 === 0) return () => (r0 + r1) / 2;
+  return (v) => r0 + (v - d0) / (d1 - d0) * (r1 - r0);
+}
+
+function niceTicks(lo, hi, n = 5) {
+  if (hi - lo === 0) return [lo];
+  const raw = (hi - lo) / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || 10 * mag;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+
+function frame(host, { xs, ys, xTicks, yTicks, xFmt, yFmt, height = H }) {
+  host.innerHTML = "";
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${height}`, role: "img" });
+  const y0 = height - M.bottom;
+  for (const t of yTicks) {
+    const y = ys(t);
+    svg.appendChild(svgEl("line", { class: "grid-line", x1: M.left, x2: W - M.right, y1: y, y2: y }));
+    const lb = svgEl("text", { class: "tick", x: M.left - 8, y: y + 4, "text-anchor": "end" });
+    lb.textContent = yFmt(t); svg.appendChild(lb);
+  }
+  svg.appendChild(svgEl("line", { class: "axis-line", x1: M.left, x2: W - M.right, y1: y0, y2: y0 }));
+  for (const t of xTicks) {
+    const x = xs(t);
+    const lb = svgEl("text", { class: "tick", x, y: y0 + 17, "text-anchor": "middle" });
+    lb.textContent = xFmt(t); svg.appendChild(lb);
+  }
+  host.appendChild(svg);
+  return svg;
+}
+
+function linePath(pts, xs, ys, xk, yk) {
+  // Break the line across data gaps (> 5 min) rather than bridging them.
+  let d = "", prevTs = null;
+  for (const p of pts) {
+    if (p[yk] == null) { prevTs = null; continue; }
+    const gap = prevTs !== null && p.ts - prevTs > 300;
+    d += (prevTs === null || gap ? "M" : "L") + xs(p[xk]) + "," + ys(p[yk]);
+    prevTs = p.ts;
+  }
+  return d;
+}
+
+/* temperatures */
+function drawTemp() {
+  const host = $("#chart-temp");
+  const pts = samples.filter(s => s.indoor != null);
+  if (pts.length < 2) { host.innerHTML = '<p class="empty">Not enough samples yet.</p>'; return; }
+
+  const [t0, t1] = xDomain();
+  const vals = pts.flatMap(s => [s.indoor, s.outdoor, s.target]).filter(v => v != null);
+  const lo = Math.min(...vals) - 1, hi = Math.max(...vals) + 1;
+  const xs = scale(t0, t1, M.left, W - M.right), ys = scale(lo, hi, H - M.bottom, M.top);
+  const svg = frame(host, { xs, ys, xTicks: niceTicks(t0, t1, 5), yTicks: niceTicks(lo, hi, 5),
+    xFmt: xFmt(), yFmt: v => v.toFixed(0) + "°" });
+
+  // Area between the two curves: the gap the AC fights.
+  const both = pts.filter(s => s.outdoor != null);
+  if (both.length > 1) {
+    const up = both.map(s => `${xs(s.ts)},${ys(s.outdoor)}`).join(" L");
+    const dn = both.slice().reverse().map(s => `${xs(s.ts)},${ys(s.indoor)}`).join(" L");
+    svg.appendChild(svgEl("path", { d: `M${up} L${dn} Z`, fill: "var(--outdoor)", opacity: 0.08 }));
+  }
+
+  if (pts.some(s => s.target != null))
+    svg.appendChild(svgEl("path", { d: linePath(pts, xs, ys, "ts", "target"),
+      class: "series", stroke: "var(--muted)", "stroke-width": 1.5, "stroke-dasharray": "4 4" }));
+  svg.appendChild(svgEl("path", { d: linePath(both, xs, ys, "ts", "outdoor"), class: "series", stroke: "var(--outdoor)" }));
+  svg.appendChild(svgEl("path", { d: linePath(pts, xs, ys, "ts", "indoor"), class: "series", stroke: "var(--indoor)" }));
+
+  // Direct labels at the curve ends, rather than a number on every point.
+  const last = pts[pts.length - 1];
+  const label = (v, color, dy = 0) => {
+    if (v == null) return;
+    const e = svgEl("text", { class: "dlabel", x: W - M.right + 6, y: ys(v) + 4 + dy, fill: color });
+    e.textContent = v.toFixed(1) + "°"; svg.appendChild(e);
+  };
+  const dy = last.outdoor != null && Math.abs(ys(last.outdoor) - ys(last.indoor)) < 13
+    ? (last.outdoor > last.indoor ? -6 : 6) : 0;
+  label(last.outdoor, "var(--outdoor)", dy);
+  label(last.indoor, "var(--indoor)", -dy);
+
+  attachHover(svg, pts, xs, (s) => [
+    ["Indoor", s.indoor != null ? s.indoor.toFixed(1) + " °C" : "-", "var(--indoor)"],
+    ["Outdoor", s.outdoor != null ? s.outdoor.toFixed(1) + " °C" : "-", "var(--outdoor)"],
+    ["Setpoint", s.target != null ? s.target.toFixed(1) + " °C" : "-", "var(--muted)"],
+  ]);
+}
+
+/* power */
+function drawPower() {
+  const host = $("#chart-power");
+  const pts = samples.filter(s => s.watts != null);
+  if (pts.length < 2) { host.innerHTML = '<p class="empty">Not enough power samples yet.</p>'; return; }
+
+  const h = 190;
+  const [t0, t1] = xDomain();
+  const hi = Math.max(...pts.map(s => s.watts)) * 1.12;
+  const xs = scale(t0, t1, M.left, W - M.right), ys = scale(0, hi, h - M.bottom, M.top);
+  const svg = frame(host, { xs, ys, xTicks: niceTicks(t0, t1, 5), yTicks: niceTicks(0, hi, 4),
+    xFmt: xFmt(), yFmt: v => v.toFixed(0), height: h });
+
+  // "Compressor running" bands, only when the two regimes are distinct.
+  const thr = hyst && hyst.ok && hyst.bimodal ? hyst.power_threshold_w : null;
+  $("#power-desc").textContent = thr != null
+    ? `Same time axis. The light band marks the compressor running (above ${Math.round(thr)} W).`
+    : "Same time axis as the temperatures.";
+  if (thr != null) {
+    let start = null;
+    for (const s of pts) {
+      const on = s.watts >= thr;
+      if (on && start === null) start = s.ts;
+      if (!on && start !== null) {
+        svg.appendChild(svgEl("rect", { x: xs(start), y: M.top, width: Math.max(1, xs(s.ts) - xs(start)),
+          height: h - M.bottom - M.top, fill: "var(--power)", opacity: 0.07 }));
+        start = null;
+      }
+    }
+    if (start !== null)
+      svg.appendChild(svgEl("rect", { x: xs(start), y: M.top, width: Math.max(1, xs(pts[pts.length-1].ts) - xs(start)),
+        height: h - M.bottom - M.top, fill: "var(--power)", opacity: 0.07 }));
+  }
+
+  svg.appendChild(svgEl("path", { d: linePath(pts, xs, ys, "ts", "watts"), class: "series", stroke: "var(--power)" }));
+  const last = pts[pts.length - 1];
+  const e = svgEl("text", { class: "dlabel", x: W - M.right + 6, y: ys(last.watts) + 4, fill: "var(--power)" });
+  e.textContent = Math.round(last.watts) + " W"; svg.appendChild(e);
+
+  attachHover(svg, pts, xs, (s) => [["Power", Math.round(s.watts) + " W", "var(--power)"]], h);
+}
+
+/* power vs distance from setpoint */
+function drawHyst() {
+  const host = $("#chart-hyst"), desc = $("#hyst-desc");
+
+  if (!hyst || !hyst.ok) {
+    desc.textContent = "The curve appears once the AC has run a while in cool/heat mode.";
+    host.innerHTML = `<p class="empty">${hyst && hyst.reason ? hyst.reason : "No data yet."}</p>`;
+    return;
+  }
+
+  // Keep only well-populated bins: bins with 1-2 samples (extreme tails) would make
+  // misleading spikes. The aggregation is what makes it readable.
+  const curve = (hyst.curve || []).filter(p => p.n >= 4);
+  if (curve.length < 2) { host.innerHTML = '<p class="empty">Not enough samples yet.</p>'; return; }
+
+  // Is there a clear gap between "cooling" and "warming"? (= visible hysteresis)
+  const split = curve.filter(p => p.cool != null && p.warm != null);
+  const hyloop = split.length >= 3 &&
+    split.reduce((a, p) => a + Math.abs(p.cool - p.warm), 0) / split.length >= 12;
+  desc.textContent = hyloop
+    ? "Typical power vs distance from setpoint. The gap between the cooling branch "
+      + "(blue) and the warming branch (orange) is the hysteresis: at equal error the "
+      + "AC draws more while actively cooling."
+    : "Typical power vs distance from setpoint (median per bin, 25-75 band). The "
+      + "further the room is above setpoint, the harder the AC pushes. Aggregated over "
+      + "the whole window, so readable at any span.";
+  const sw = (c) => `<span><i class="swatch" style="background:${c}"></i>`;
+  $("#hyst-legend").innerHTML = hyloop
+    ? sw("var(--indoor)") + "cooling</span>" + sw("var(--outdoor)") + "warming</span>"
+    : sw("var(--power)") + "median, 25-75 band</span>";
+
+  const h = 300, m = { top: 16, right: 24, bottom: 40, left: 52 };
+  const xlo = curve[0].error - 0.25, xhi = curve[curve.length - 1].error + 0.25;
+  const yhi = Math.max(...curve.map(p => p.p75)) * 1.12;
+  const xs = scale(xlo, xhi, m.left, W - m.right), ys = scale(0, yhi, h - m.bottom, m.top);
+
+  host.innerHTML = "";
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${h}` });
+  for (const t of niceTicks(0, yhi, 4)) {
+    const y = ys(t);
+    svg.appendChild(svgEl("line", { class: "grid-line", x1: m.left, x2: W - m.right, y1: y, y2: y }));
+    const lb = svgEl("text", { class: "tick", x: m.left - 8, y: y + 4, "text-anchor": "end" });
+    lb.textContent = t.toFixed(0); svg.appendChild(lb);
+  }
+  svg.appendChild(svgEl("line", { class: "axis-line", x1: m.left, x2: W - m.right, y1: h - m.bottom, y2: h - m.bottom }));
+  for (const t of niceTicks(xlo, xhi, 6)) {
+    const lb = svgEl("text", { class: "tick", x: xs(t), y: h - m.bottom + 17, "text-anchor": "middle" });
+    lb.textContent = (t > 0 ? "+" : "") + t.toFixed(1); svg.appendChild(lb);
+  }
+  // The setpoint: the origin of the error.
+  svg.appendChild(svgEl("line", { class: "axis-line", x1: xs(0), x2: xs(0), y1: m.top, y2: h - m.bottom, "stroke-dasharray": "4 4" }));
+  const cl = svgEl("text", { class: "tick", x: xs(0), y: m.top - 4, "text-anchor": "middle" });
+  cl.textContent = "setpoint"; svg.appendChild(cl);
+  const ax = svgEl("text", { class: "tick", x: (m.left + W - m.right) / 2, y: h - 6, "text-anchor": "middle" });
+  ax.textContent = "distance from setpoint (°C)"; svg.appendChild(ax);
+  const ay = svgEl("text", { class: "tick", x: 12, y: h / 2, "text-anchor": "middle", transform: `rotate(-90 12 ${h/2})` });
+  ay.textContent = "power (W)"; svg.appendChild(ay);
+
+  const line = (key, pts) => pts.filter(p => p[key] != null)
+    .map((p, i) => (i ? "L" : "M") + xs(p.error) + "," + ys(p[key])).join(" ");
+
+  // Chevrons along the branch's direction of travel: they give the aggregated curve
+  // back the loop's rotation (cooling = leftward as the error shrinks; warming = right).
+  const chevrons = (key, dir, color) => {
+    const pl = curve.filter(p => p[key] != null).map(p => ({ x: xs(p.error), y: ys(p[key]) }));
+    if (pl.length < 2) return;
+    const n = Math.min(4, pl.length - 1);
+    for (let k = 1; k <= n; k++) {
+      const i = Math.max(1, Math.round(k / (n + 1) * (pl.length - 1)));
+      const a = pl[i - 1], b = pl[i];
+      const from = dir > 0 ? a : b, to = dir > 0 ? b : a;   // travel direction
+      const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy);
+      if (len < 6) continue;
+      const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, A = 5, Wd = 3.2;
+      svg.appendChild(svgEl("path", {
+        d: `M${mx + ux * A},${my + uy * A} L${mx - ux * A + px * Wd},${my - uy * A + py * Wd} `
+         + `L${mx - ux * A - px * Wd},${my - uy * A - py * Wd} Z`,
+        fill: color, opacity: 0.9,
+      }));
+    }
+  };
+
+  if (hyloop) {
+    // Two directional branches: that is the hysteresis, made readable.
+    svg.appendChild(svgEl("path", { d: line("cool", curve), class: "series", stroke: "var(--indoor)" }));
+    svg.appendChild(svgEl("path", { d: line("warm", curve), class: "series", stroke: "var(--outdoor)" }));
+    chevrons("cool", -1, "var(--indoor)");   // cooling: error shrinks, leftward
+    chevrons("warm", +1, "var(--outdoor)");  // warming: error grows, rightward
+  } else {
+    // Otherwise a single curve: median power per bin, with the p25-p75 band (here it
+    // means something: spread around one curve).
+    const up = curve.map(p => `${xs(p.error)},${ys(p.p75)}`).join(" L");
+    const dn = curve.slice().reverse().map(p => `${xs(p.error)},${ys(p.p25)}`).join(" L");
+    svg.appendChild(svgEl("path", { d: `M${up} L${dn} Z`, fill: "var(--power)", opacity: 0.12 }));
+    svg.appendChild(svgEl("path", { d: line("median", curve), class: "series", stroke: "var(--power)" }));
+    for (const p of curve)
+      svg.appendChild(svgEl("circle", { cx: xs(p.error), cy: ys(p.median), r: 3,
+        fill: "var(--power)", stroke: "var(--surface-1)", "stroke-width": 1.5 }));
+  }
+
+  // Current point: where the AC is right now.
+  const last = [...samples].reverse().find(s => s.watts != null && s.indoor != null && s.target != null && s.power);
+  if (last) {
+    const e = last.indoor - last.target;
+    if (e >= xlo && e <= xhi)
+      svg.appendChild(svgEl("circle", { cx: xs(e), cy: ys(Math.min(last.watts, yhi)), r: 5,
+        fill: "var(--text-primary)", stroke: "var(--surface-1)", "stroke-width": 2 }));
+  }
+
+  // Hover: typical power + sample count at each bin.
+  const hit = svgEl("rect", { x: m.left, y: m.top, width: W - m.right - m.left,
+    height: h - m.bottom - m.top, fill: "transparent" });
+  svg.appendChild(hit);
+  const vline = svgEl("line", { class: "axis-line", y1: m.top, y2: h - m.bottom, opacity: 0 });
+  svg.appendChild(vline);
+  hit.addEventListener("pointermove", (ev) => {
+    const box = svg.getBoundingClientRect();
+    const px = (ev.clientX - box.left) / box.width * W;          // px viewBox
+    const ex = xlo + (px - m.left) / (W - m.right - m.left) * (xhi - xlo);  // -> error C
+    let best = curve[0], bd = Infinity;
+    for (const p of curve) { const d = Math.abs(p.error - ex); if (d < bd) { bd = d; best = p; } }
+    vline.setAttribute("x1", xs(best.error)); vline.setAttribute("x2", xs(best.error)); vline.setAttribute("opacity", 1);
+    const rows = [["Median power", Math.round(best.median) + " W", "var(--power)"]];
+    if (best.cool != null) rows.push(["while cooling", Math.round(best.cool) + " W", "var(--indoor)"]);
+    if (best.warm != null) rows.push(["while warming", Math.round(best.warm) + " W", "var(--outdoor)"]);
+    rows.push(["Samples", best.n, "var(--muted)"]);
+    tooltip.innerHTML = `<div class="tt-time">error ${best.error > 0 ? "+" : ""}${best.error.toFixed(2)} °C</div>` +
+      rows.map(([k, v, c]) => `<div class="tt-row"><span><i class="swatch" style="background:${c}"></i> ${k}</span><span class="tt-val">${v}</span></div>`).join("");
+    tooltip.style.opacity = 1;
+    const tw = tooltip.offsetWidth;
+    tooltip.style.left = Math.min(ev.clientX + 14, window.innerWidth - tw - 8) + "px";
+    tooltip.style.top = (ev.clientY + 14) + "px";
+  });
+  hit.addEventListener("pointerleave", () => { tooltip.style.opacity = 0; vline.setAttribute("opacity", 0); });
+
+  host.appendChild(svg);
+}
+
+/* hover + drag selection */
+function attachHover(svg, pts, xs, rows, height = H) {
+  const plotLeft = M.left, plotRight = W - M.right;
+  const cross = svgEl("line", { class: "axis-line", y1: M.top, y2: height - M.bottom, opacity: 0 });
+  svg.appendChild(cross);
+  // Selection rectangle, drawn during the drag.
+  const band = svgEl("rect", { y: M.top, height: height - M.top - M.bottom,
+    fill: "var(--indoor)", opacity: 0, "pointer-events": "none" });
+  svg.appendChild(band);
+  const hit = svgEl("rect", { x: plotLeft, y: M.top, width: plotRight - plotLeft,
+    height: height - M.top - M.bottom, fill: "transparent", style: "cursor: crosshair" });
+  svg.appendChild(hit);
+
+  // SVG px (viewBox) from the mouse event.
+  const toPx = (ev) => {
+    const box = svg.getBoundingClientRect();
+    return Math.max(plotLeft, Math.min(plotRight, (ev.clientX - box.left) / box.width * W));
+  };
+  // Inverse of the time scale: px -> epoch.
+  const [d0, d1] = xDomain();
+  const pxToTs = (px) => d0 + (px - plotLeft) / (plotRight - plotLeft) * (d1 - d0);
+
+  let dragStart = null;
+
+  const showTooltip = (ev) => {
+    const px = toPx(ev);
+    let best = pts[0], bd = Infinity;
+    for (const p of pts) { const d = Math.abs(xs(p.ts) - px); if (d < bd) { bd = d; best = p; } }
+    cross.setAttribute("x1", xs(best.ts)); cross.setAttribute("x2", xs(best.ts)); cross.setAttribute("opacity", 1);
+    tooltip.innerHTML = `<div class="tt-time">${fmtDate(best.ts)}</div>` + rows(best).map(([k, v, c]) =>
+      `<div class="tt-row"><span><i class="swatch" style="background:${c}"></i> ${k}</span><span class="tt-val">${v}</span></div>`).join("");
+    tooltip.style.opacity = 1;
+    const tw = tooltip.offsetWidth;
+    tooltip.style.left = Math.min(ev.clientX + 14, window.innerWidth - tw - 8) + "px";
+    tooltip.style.top = (ev.clientY + 14) + "px";
+  };
+
+  hit.addEventListener("pointerdown", (ev) => {
+    dragStart = toPx(ev);
+    hit.setPointerCapture(ev.pointerId);
+    tooltip.style.opacity = 0; cross.setAttribute("opacity", 0);
+  });
+
+  hit.addEventListener("pointermove", (ev) => {
+    if (dragStart === null) { showTooltip(ev); return; }
+    const px = toPx(ev);
+    const x0 = Math.min(dragStart, px), x1 = Math.max(dragStart, px);
+    band.setAttribute("x", x0); band.setAttribute("width", x1 - x0); band.setAttribute("opacity", 0.16);
+  });
+
+  const finish = (ev) => {
+    if (dragStart === null) return;
+    const px = toPx(ev);
+    const a = Math.min(dragStart, px), b = Math.max(dragStart, px);
+    dragStart = null; band.setAttribute("opacity", 0);
+    // Under ~8 px it is a click, not a selection: do not zoom.
+    if (b - a < 8) return;
+    const t0 = Math.round(pxToTs(a)), t1 = Math.round(pxToTs(b));
+    if (t1 - t0 < 120) return;  // under 2 min: not worth it
+    applyRange(t0, t1);
+  };
+  hit.addEventListener("pointerup", finish);
+  hit.addEventListener("pointercancel", () => { dragStart = null; band.setAttribute("opacity", 0); });
+  hit.addEventListener("pointerleave", () => {
+    if (dragStart === null) { tooltip.style.opacity = 0; cross.setAttribute("opacity", 0); }
+  });
+}
+
+function applyRange(t0, t1) {
+  customRange = [t0, t1];
+  document.querySelectorAll("#filters button[data-hours]").forEach(b => b.setAttribute("aria-pressed", "false"));
+  $("#zoom-reset").style.display = "";
+  // Shareable selection: reloaded as is if you reopen the link.
+  location.hash = `zoom=${t0},${t1}`;
+  load();
+}
+
+function clearRange() {
+  customRange = null;
+  $("#zoom-reset").style.display = "none";
+  history.replaceState(null, "", location.pathname);
+  load();
+}
+
+// A #zoom=t0,t1 link reopens straight onto that period.
+(function initZoomFromHash() {
+  const m = /zoom=(\d+),(\d+)/.exec(location.hash);
+  if (!m) return;
+  const t0 = +m[1], t1 = +m[2];
+  if (t1 > t0) { customRange = [t0, t1]; }
+})();
+
+/* tiles + table */
+function tile(label, value, unit, note) {
+  return `<div class="tile"><div class="label">${label}</div>
+    <div class="value">${value}<span class="unit">${unit ? " " + unit : ""}</span></div>
+    ${note ? `<div class="note">${note}</div>` : ""}</div>`;
+}
+
+function drawTiles() {
+  const last = [...samples].reverse().find(s => s.indoor != null);
+  const t = [];
+  if (last && last.outdoor != null) {
+    const d = last.outdoor - last.indoor;
+    t.push(tile("Indoor / outdoor gap", (d > 0 ? "+" : "") + d.toFixed(1), "°C",
+      `${last.indoor.toFixed(1)} °C in, ${last.outdoor.toFixed(1)} °C out`));
+  }
+  if (hyst && hyst.ok) {
+    if (hyst.bimodal && hyst.deadband != null) {
+      t.push(tile("Deadband", hyst.deadband.toFixed(1), "°C", `starts at ${hyst.t_on} °C, stops at ${hyst.t_off} °C`));
+      t.push(tile("Compressor active", (hyst.duty_cycle * 100).toFixed(0), "%",
+        hyst.mean_cycle_min ? `mean cycle ${hyst.mean_cycle_min} min` : `${hyst.n_starts} start(s)`));
+      if (hyst.cool_rate_c_per_h != null)
+        t.push(tile("Cooling rate", hyst.cool_rate_c_per_h.toFixed(1), "°C/h",
+          hyst.warm_rate_c_per_h != null ? `warms at ${hyst.warm_rate_c_per_h.toFixed(1)} °C/h` : ""));
+    } else {
+      // Not two distinct regimes: duty cycle and slopes would be noise.
+      t.push(tile("Deadband", "-", "",
+        `no on/off cycle in this window (power ratio ${hyst.ratio ?? "?"})`));
+    }
+    t.push(tile("Average power", Math.round(hyst.mean_power_w), "W",
+      `${hyst.n_samples} samples, AC on`));
+    if (hyst.follow_me_fraction > 0)
+      t.push(tile("iSense", (hyst.follow_me_fraction * 100).toFixed(0), "%",
+        "regulating on the remote: thresholds are against the unit's sensor"));
+  }
+  $("#tiles").innerHTML = t.join("") || tile("Samples", samples.length, "", "waiting");
+}
+
+function drawTable() {
+  const rows = [...samples].reverse().slice(0, 500);
+  $("#table").innerHTML = `<table><thead><tr>
+    <th>Time</th><th>Indoor</th><th>Outdoor</th><th>Setpoint</th><th>Power</th><th>Mode</th></tr></thead><tbody>` +
+    rows.map(s => `<tr><td>${fmtDate(s.ts)}</td>
+      <td>${s.indoor?.toFixed(1) ?? "-"}</td><td>${s.outdoor?.toFixed(1) ?? "-"}</td>
+      <td>${s.target?.toFixed(1) ?? "-"}</td><td>${s.watts != null ? Math.round(s.watts) : "-"}</td>
+      <td>${s.power ? s.mode : "off"}</td></tr>`).join("") + "</tbody></table>";
+}
+
+/* command journal */
+let commandsData = [];
+
+const CMD_LABELS = {
+  mode: "Mode", target: "Setpoint", fan: "Fan", swing: "Swing",
+  rate_select: "Max power", ieco: "iECO", turbo: "Turbo", sleep: "Sleep",
+  out_silent: "Outdoor silent", purifier: "Purifier",
+  freeze_protection: "Freeze protection", follow_me: "iSense", display_on: "Display",
+};
+const BOOL_FIELDS = new Set(["ieco", "turbo", "sleep", "out_silent", "purifier",
+  "freeze_protection", "follow_me", "display_on"]);
+// Special sources, made readable (others keep the tailscale name).
+const SOURCE_LABELS = { externe: "Remote / app", homekit: "HomeKit" };
+const srcLabel = (c) => SOURCE_LABELS[c.source] ?? c.source_name ?? c.source;
+
+function fmtCmdVal(field, v) {
+  if (field === "target") return `${(+v).toFixed(1)} °C`;
+  if (field === "mode") return MODE_LABELS[v] ?? v;
+  if (field === "fan") return FAN_LABELS[FAN_ALIAS[v] ?? v] ?? v;
+  if (field === "swing") return v === "OFF" ? "off" : "vertical";
+  if (field === "rate_select") return RATE_LABELS[v] ?? v;
+  return String(v);
+}
+
+function chipFor(c) {
+  if (c.field === "power") {
+    const on = c.to === true;
+    return `<span class="jchip ${on ? "on" : "off"}"><i class="cdot"></i>${on ? "On" : "Off"}</span>`;
+  }
+  if (BOOL_FIELDS.has(c.field)) {
+    const on = c.to === true;
+    return `<span class="jchip ${on ? "on" : "off"}"><i class="cdot"></i>${CMD_LABELS[c.field]} ${on ? "on" : "off"}</span>`;
+  }
+  return `<span class="jchip"><b>${CMD_LABELS[c.field] ?? c.field}</b> ${fmtCmdVal(c.field, c.from)}<span class="arrow">&rarr;</span>${fmtCmdVal(c.field, c.to)}</span>`;
+}
+
+function relTime(ts) {
+  const s = Math.floor(Date.now() / 1000) - ts;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function drawCommands() {
+  const host = $("#journal");
+  if (!commandsData.length) {
+    host.innerHTML = '<p class="empty">No commands recorded yet.</p>';
+    return;
+  }
+  host.innerHTML = commandsData.map(c => `
+    <div class="jrow">
+      <div class="jwhen"><div class="rel">${relTime(c.ts)}</div><div class="abs">${fmtDate(c.ts)}</div></div>
+      <div class="jwho"><i class="who-dot"></i>${srcLabel(c)}</div>
+      <div class="jchanges">${c.changes.map(chipFor).join("")}</div>
+    </div>`).join("");
+}
+
+async function loadCommands() {
+  try {
+    const r = await fetch("/commands?limit=50").then(x => x.json());
+    commandsData = r.commands || [];
+    drawCommands();
+  } catch { /* the journal is not critical, do not interrupt anything */ }
+}
+
+/* control panel */
+let caps = null, state = null, busy = false;
+
+const MODE_LABELS = { COOL: "Cool", HEAT: "Heat", DRY: "Dry", FAN_ONLY: "Fan", AUTO: "Auto", SMART_DRY: "Smart dry" };
+const FAN_LABELS = { SILENT: "Silent", LOW: "Low", MEDIUM: "Medium", HIGH: "High", MAX: "Max", AUTO: "Auto" };
+const RATE_LABELS = { OFF: "100%", GEAR_75: "75%", GEAR_50: "50%" };
+// The AC reports 1 when the fan is on SILENT: it does not return the enum value we
+// sent it.
+const FAN_ALIAS = { "1": "SILENT" };
+
+// `eco` and `follow_me` are deliberately absent: the AC refuses them over the LAN.
+// iSense is a remote-control function (the remote broadcasts its own temperature,
+// the unit cannot turn it on alone). So iSense is read-only, and the eco mode is iECO.
+const OPTIONS = [
+  { key: "ieco", label: "iECO", cap: "ieco" },
+  { key: "turbo", label: "Turbo", cap: "turbo" },
+  { key: "sleep", label: "Sleep", cap: null },
+  { key: "out_silent", label: "Outdoor silent", cap: "out_silent" },
+  { key: "purifier", label: "Purifier", cap: "purifier" },
+  { key: "freeze_protection", label: "Freeze protection", cap: "freeze_protection" },
+];
+
+function segButtons(host, values, current, labels, onPick) {
+  host.innerHTML = "";
+  for (const v of values) {
+    const b = document.createElement("button");
+    b.textContent = labels[v] ?? v;
+    b.setAttribute("aria-pressed", String(v === current));
+    b.onclick = () => onPick(v);
+    host.appendChild(b);
+  }
+}
+
+async function send(body, endpoint = "/set") {
+  if (busy) return;
+  busy = true;
+  $("#panel").classList.add("busy");
+  $("#panel-msg").classList.remove("err");
+  $("#panel-msg").textContent = "Sending...";
+  try {
+    const r = await fetch(endpoint, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: endpoint === "/set" ? JSON.stringify(body) : undefined,
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail?.[0]?.msg ?? j.detail ?? `HTTP ${r.status}`);
+    state = j;               // /set returns the state read back from the AC
+    drawPanel();
+    loadCommands();          // the command we just sent shows up in the journal
+    $("#panel-msg").textContent = "Applied.";
+    setTimeout(() => { if ($("#panel-msg").textContent === "Applied.") $("#panel-msg").textContent = ""; }, 2500);
+  } catch (e) {
+    $("#panel-msg").classList.add("err");
+    $("#panel-msg").textContent = String(e.message || e);
+    refreshState();          // we no longer know the state: re-read
+  } finally {
+    busy = false;
+    $("#panel").classList.remove("busy");
+  }
+}
+
+function drawPanel() {
+  if (!caps || !state) return;
+  const on = state.power;
+
+  const pw = $("#power");
+  pw.textContent = on ? "Turn off" : "Turn on";
+  pw.dataset.on = String(on);
+  pw.onclick = () => send({ power: !on });
+
+  $("#temp").innerHTML = (state.target != null ? state.target.toFixed(1) : "--") + "<span> &deg;C</span>";
+  const step = (d) => () => {
+    const v = Math.min(caps.max_temp, Math.max(caps.min_temp, (state.target ?? 23) + d));
+    send({ target: v });
+  };
+  $("#temp-down").onclick = step(-0.5);
+  $("#temp-up").onclick = step(+0.5);
+  $("#temp-down").disabled = state.target <= caps.min_temp;
+  $("#temp-up").disabled = state.target >= caps.max_temp;
+
+  $("#off-note").textContent = on ? "" : "The AC is off, settings apply when it turns on.";
+
+  segButtons($("#modes"), caps.modes, state.mode, MODE_LABELS, (v) => send({ mode: v }));
+  segButtons($("#fans"), caps.fan_speeds, FAN_ALIAS[state.fan] ?? state.fan, FAN_LABELS, (v) => send({ fan: v }));
+
+  if (caps.rate_selects?.length > 1)
+    segButtons($("#rates"), caps.rate_selects, state.rate_select, RATE_LABELS, (v) => send({ rate_select: v }));
+  else $("#rate-row").style.display = "none";
+
+  // A button exists only if the unit supports it: no dead controls.
+  const host = $("#toggles"); host.innerHTML = "";
+  const add = (label, active, onClick) => {
+    const b = document.createElement("button");
+    b.innerHTML = `<i class="dot"></i>${label}`;
+    b.setAttribute("aria-pressed", String(!!active));
+    b.onclick = onClick;
+    host.appendChild(b);
+  };
+  for (const o of OPTIONS) {
+    if (o.cap && !caps[o.cap]) continue;
+    add(o.label, state[o.key], () => send({ [o.key]: !state[o.key] }));
+  }
+  if (caps.swing_modes?.includes("VERTICAL"))
+    add("Swing", state.swing !== "OFF", () => send({ swing: state.swing === "OFF" ? "VERTICAL" : "OFF" }));
+  if (caps.display)
+    add("Display", state.display_on, () => send(null, "/display"));
+
+  // iSense can only be set from the remote: we show it, we do not offer it.
+  $("#isense").textContent = state.follow_me
+    ? "iSense on: the AC regulates on the remote, not its internal sensor."
+    : "";
+}
+
+async function refreshState() {
+  try {
+    if (!caps) caps = await fetch("/capabilities").then(r => r.json());
+    state = await fetch("/status").then(r => { if (!r.ok) throw new Error("AC unreachable"); return r.json(); });
+    drawPanel();
+  } catch (e) {
+    $("#panel-msg").classList.add("err");
+    $("#panel-msg").textContent = "AC unreachable: " + (e.message || e);
+  }
+}
+
+/* loading */
+async function load() {
+  document.querySelectorAll("#filters button[data-hours]").forEach(b =>
+    b.setAttribute("aria-pressed", String(!customRange && +b.dataset.hours === hours)));
+  // Drag selection: explicit bounds. Otherwise the sliding window.
+  const q = customRange ? `start=${customRange[0]}&end=${customRange[1]}` : `hours=${hours}`;
+  $(".wrap").classList.add("stale");  // no skeleton: keep the previous render
+  try {
+    const [h, y] = await Promise.all([
+      fetch(`/history?${q}`).then(r => r.json()),
+      fetch(`/hysteresis?${q}`).then(r => r.json()),
+    ]);
+    samples = h.samples; hyst = y;
+    if (customRange) {
+      [, windowEnd] = customRange;  // the axis matches the selection
+    } else {
+      windowEnd = Math.max(Math.floor(Date.now() / 1000),
+                           samples.length ? samples[samples.length - 1].ts : 0);
+    }
+    const span = customRange ? ", zoom" : "";
+    $("#subtitle").textContent = samples.length
+      ? `${samples.length} samples, from ${fmtDate(samples[0].ts)} to ${fmtDate(samples[samples.length-1].ts)}${span}`
+      : "No samples in this period.";
+    drawTiles(); drawTemp(); drawPower(); drawHyst(); drawTable();
+  } catch (e) {
+    $("#subtitle").textContent = "Service not responding: " + e.message;
+  } finally {
+    $(".wrap").classList.remove("stale");
+  }
+}
+
+$("#filters").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.id === "zoom-reset") { clearRange(); return; }
+  customRange = null;
+  $("#zoom-reset").style.display = "none";
+  hours = +b.dataset.hours; load();
+});
+window.addEventListener("resize", () => { drawTemp(); drawPower(); drawHyst(); });
+
+if (customRange) $("#zoom-reset").style.display = "";  // opened via a #zoom link
+refreshState();
+load();
+loadCommands();
+setInterval(() => {
+  load();
+  loadCommands();
+  if (!busy) refreshState();  // do not overwrite a setting mid-send
+}, 60000);
+</script>
+</body>
+</html>
