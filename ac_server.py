@@ -73,6 +73,13 @@ AP_HYST = _env_float("AC_AP_HYST", 0.5)       # room must exceed setpoint by thi
 # keep cooling instead of idling.
 AP_STAYON_MARGIN = _env_float("AC_AP_STAYON_MARGIN", 3.0)
 AP_LOOKAHEAD = _env_float("AC_AP_LOOKAHEAD", 4.0)
+# When idle (off), the return-air sensor goes stale: with no fan there is no airflow
+# to equilibrate it with the room, and it stays pinned near the cold coil. Measured:
+# room at 24.7 while the sensor read 22.5, and it took ~6 min just to step 0.5C. So
+# before trusting "cool enough", periodically pulse the indoor fan (FAN_ONLY, no
+# compressor) to flush room air over the sensor, read the truth, then decide.
+AP_REFRESH = _env_float("AC_AP_REFRESH", 600.0)  # pulse the fan this often while idle
+AP_PURGE = _env_float("AC_AP_PURGE", 90.0)        # run the fan this long to get a reading
 
 # Optional calibration for a return-air sensor that reads off the occupied room (some
 # sit in the recirculated, partly cooled airflow near the coil). Added to the sensor
@@ -134,6 +141,16 @@ _last_manual_ts: float = 0.0
 # when off / cools when running (C/h), and the AROME forecast bias (model minus
 # measured outdoor).
 _ap_model: dict = {"warm_rate": None, "cool_rate": None, "bias": 0.0, "ts": 0.0}
+
+# Fan-purge state: while idle, we periodically run the fan to refresh the stale sensor
+# (see AP_REFRESH). purging is True while that fan pulse is running; purge_start dates
+# it; last_refresh is when we last had a trustworthy reading (a purge or active cooling).
+_ap_refresh: dict = {"purging": False, "purge_start": 0.0, "last_refresh": 0.0}
+
+# Fan-purge transitions are sensor housekeeping, not control actions: keep them out of
+# the command journal (they would otherwise add two entries every AP_REFRESH). Only the
+# real cool/idle decisions are logged.
+_AP_QUIET_REASONS = {"checking room temperature", "still cool, back to idle"}
 
 
 async def _auth() -> None:
@@ -260,8 +277,9 @@ async def _logger_loop() -> None:
                     eco = (eco_before, _state(), reason)
             storage.insert(row)
             if eco is not None:
-                _log_change("auto", "autopilot", eco[0], eco[1])
                 print(f"[info] autopilot: {eco[2]}")
+                if eco[2] not in _AP_QUIET_REASONS:
+                    _log_change("auto", "autopilot", eco[0], eco[1])
             if _health["failures"]:
                 print(f"[info] AC reachable again after {_health['failures']} failure(s)")
             _health["last_ok"] = int(time.time())
@@ -532,25 +550,51 @@ def _autopilot_decision() -> tuple[dict, str] | None:
     # after a manual command.
     if not _autopilot:
         return None
-    if time.time() - _last_manual_ts < AP_PAUSE:
+    now = time.time()
+    if now - _last_manual_ts < AP_PAUSE:
         return None
     indoor = _room_temp()
     ceiling = device.target_temperature
     if indoor is None or ceiling is None:
         return None
     on = bool(device.power_state)
-    cooling = on and _label(device.operational_mode) == "COOL"
+    mode = _label(device.operational_mode)
+    cooling = on and mode == "COOL"
     t_hot, _ = _predict_hot(ceiling)
-    now = time.time()
     above = indoor >= ceiling + AP_HYST
     anticipate = t_hot is not None and now >= t_hot - _ap_lead_seconds()
+
+    # Fan purge in progress: the indoor fan is flushing room air over the sensor. Wait
+    # for it to equilibrate, then decide on the fresh reading. If the state is no longer
+    # our FAN_ONLY (a manual change interrupted it), drop the purge and fall through.
+    purging = _ap_refresh["purging"] and on and mode == "FAN_ONLY"
+    if _ap_refresh["purging"] and not purging:
+        _ap_refresh["purging"] = False
+    if purging:
+        if now - _ap_refresh["purge_start"] < AP_PURGE:
+            return None  # keep fanning, let the sensor catch up to the room
+        _ap_refresh["purging"] = False
+        _ap_refresh["last_refresh"] = now
+        if above or anticipate:
+            return ({"power": True, "mode": "COOL"}, "room warm, resuming cooling")
+        return ({"power": False}, "still cool, back to idle")
+
     if not on:
         if above:
             return ({"power": True, "mode": "COOL"}, "room above setpoint")
         if anticipate:
             return ({"power": True, "mode": "COOL"}, "getting ahead of the heat")
+        # Idle: the sensor is stale without airflow. Pulse the fan to read the truth
+        # before trusting "cool enough", so we never sit blind while the room climbs.
+        if now - _ap_refresh["last_refresh"] >= AP_REFRESH:
+            _ap_refresh["purging"] = True
+            _ap_refresh["purge_start"] = now
+            return ({"power": True, "mode": "FAN_ONLY"}, "checking room temperature")
         return None
     if cooling and not above and not anticipate and indoor <= ceiling:
+        # We have a fresh reading right now (fan was running), so the first purge is a
+        # full interval away.
+        _ap_refresh["last_refresh"] = now
         return ({"power": False}, "cool enough, idling")
     return None
 
@@ -583,6 +627,9 @@ def _autopilot_status() -> dict:
     if now - _last_manual_ts < AP_PAUSE:
         mins = int((AP_PAUSE - (now - _last_manual_ts)) / 60) + 1
         return {"on": True, "text": f"paused (manual override), ~{mins} min left"}
+    if (_ap_refresh["purging"] and bool(device.power_state)
+            and _label(device.operational_mode) == "FAN_ONLY"):
+        return {"on": True, "text": "checking room temperature"}
     indoor = _room_temp()
     ceiling = device.target_temperature
     if indoor is None or ceiling is None:
