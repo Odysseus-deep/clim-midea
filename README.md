@@ -41,6 +41,12 @@ Tailscale, no cloud involved.
 - The temperature chart shades the background by the sun's height (computed, no
   API) and can extend the outdoor curve with a weather forecast (Open-Meteo, AROME
   by default), so you can see the heat coming.
+- Autopilot (optional, toggle on the dashboard): treats the AC's setpoint as a
+  ceiling, turns the unit fully off when the room is cool enough (silent, ~0 W,
+  still measuring), and starts cooling ahead of forecast heat. Lead time comes from
+  the room's own cooling rate, measured per fan speed from the logged history, and
+  from the AROME forecast de-biased against the outdoor temperature it actually
+  measured. A live indicator shows what it is doing and when it will act next.
 
 The hysteresis view aggregates power by distance from setpoint, so it stays readable
 over any span. On an inverter that modulates, the cooling and warming branches
@@ -135,6 +141,7 @@ POST /temp?value=22.5
 POST /mode?value=HEAT
 POST /fan?value=AUTO
 POST /display
+POST /autopilot?on=true  toggle autopilot at runtime
 ```
 
 `/set` validates against the device's real capabilities and returns the state read

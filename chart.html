@@ -193,6 +193,11 @@
       </div>
       <div class="off-note" id="off-note"></div>
     </div>
+    <div class="row" id="ap-row" style="display:none">
+      <span class="rlabel">Autopilot</span>
+      <div class="toggles"><button id="ap-toggle"><i class="dot"></i>Autopilot</button></div>
+      <span class="off-note" id="ap-note"></span>
+    </div>
     <div class="row"><span class="rlabel">Mode</span><div class="segmented" id="modes"></div></div>
     <div class="row"><span class="rlabel">Fan</span><div class="segmented" id="fans"></div></div>
     <div class="row" id="rate-row"><span class="rlabel">Max power</span><div class="segmented" id="rates"></div></div>
@@ -766,11 +771,12 @@ const CMD_LABELS = {
   rate_select: "Max power", ieco: "iECO", turbo: "Turbo", sleep: "Sleep",
   out_silent: "Outdoor silent", purifier: "Purifier",
   freeze_protection: "Freeze protection", follow_me: "iSense", display_on: "Display",
+  autopilot: "Autopilot",
 };
 const BOOL_FIELDS = new Set(["ieco", "turbo", "sleep", "out_silent", "purifier",
-  "freeze_protection", "follow_me", "display_on"]);
+  "freeze_protection", "follow_me", "display_on", "autopilot"]);
 // Special sources, made readable (others keep the tailscale name).
-const SOURCE_LABELS = { externe: "Remote / app", homekit: "HomeKit" };
+const SOURCE_LABELS = { externe: "Remote / app", homekit: "HomeKit", auto: "Autopilot" };
 const srcLabel = (c) => SOURCE_LABELS[c.source] ?? c.source_name ?? c.source;
 
 function fmtCmdVal(field, v) {
@@ -935,6 +941,14 @@ function drawPanel() {
   $("#isense").textContent = state.follow_me
     ? "iSense on: the AC regulates on the remote, not its internal sensor."
     : "";
+
+  // Autopilot toggle + live indicator (setpoint is the ceiling).
+  const ap = state.autopilot;
+  if (ap) {
+    $("#ap-row").style.display = "";
+    $("#ap-toggle").setAttribute("aria-pressed", String(!!ap.on));
+    $("#ap-note").textContent = ap.on ? ap.text : "off, AC left as you set it";
+  }
 }
 
 async function refreshState() {
@@ -996,6 +1010,15 @@ function loadForecast() {
     if (samples.length) drawTemp();
   }).catch(() => {});
 }
+// Autopilot: the toggle and the live indicator come from /status (state.autopilot).
+$("#ap-toggle").onclick = async () => {
+  const on = state && state.autopilot && state.autopilot.on;
+  try {
+    await fetch("/autopilot?on=" + (!on), { method: "POST" });
+    refreshState();
+  } catch { /* ignore */ }
+};
+
 fetch("/config").then(r => r.json()).then(c => {
   if (c && c.lat != null && c.lon != null) {
     geo = c;

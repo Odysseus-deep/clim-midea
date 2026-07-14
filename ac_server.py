@@ -61,6 +61,22 @@ AC_LON = _env_optfloat("AC_LON")
 # France; set AC_WX_MODEL=best_match elsewhere.
 AC_WX_MODEL = os.environ.get("AC_WX_MODEL", "arome_france_hd")
 
+# Autopilot: the AC's own setpoint (consigne) is the ceiling. Keep the room under
+# it, turning the AC fully off when it is cool enough (silent, ~0 W, the unit still
+# reports temperature), and cooling/holding when the AROME forecast says heat is
+# coming. One temperature, no second "comfort" value. Toggleable at runtime via
+# POST /autopilot; AC_AUTOPILOT is only the initial state.
+AP_PAUSE = _env_float("AC_AP_PAUSE", 3600.0)  # back off this long after a manual command
+AP_HYST = _env_float("AC_AP_HYST", 0.5)       # room must exceed setpoint by this to cool
+# The room lags outdoor by roughly this (insulation + thermal mass): if the forecast
+# peak over the next LOOKAHEAD hours is above setpoint + this, heat is coming and we
+# keep cooling instead of idling.
+AP_STAYON_MARGIN = _env_float("AC_AP_STAYON_MARGIN", 3.0)
+AP_LOOKAHEAD = _env_float("AC_AP_LOOKAHEAD", 4.0)
+
+# Runtime state, toggleable via /autopilot. Starts from the env default.
+_autopilot = os.environ.get("AC_AUTOPILOT", "0") in ("1", "true", "yes")
+
 
 # Overridable via env, mostly to exercise failure recovery without waiting minutes.
 TIMEOUT = _env_float("AC_TIMEOUT", 12.0)          # AC answers in 1-3s; past that, dead session
@@ -99,6 +115,15 @@ _health = {"last_ok": None, "last_error": None, "failures": 0, "rediscoveries": 
 # unit's buttons, a timer). Updated after each command (so we don't confuse them)
 # and on every logger sample.
 _last_state: dict | None = None
+
+# When the last MANUAL command happened (web, HomeKit, remote). Autopilot backs off
+# for AP_PAUSE after it, so it never fights a deliberate action.
+_last_manual_ts: float = 0.0
+
+# Autopilot brain, refreshed periodically from backdata: how fast the room warms
+# when off / cools when running (C/h), and the AROME forecast bias (model minus
+# measured outdoor).
+_ap_model: dict = {"warm_rate": None, "cool_rate": None, "bias": 0.0, "ts": 0.0}
 
 
 async def _auth() -> None:
@@ -202,16 +227,31 @@ async def _logger_loop() -> None:
     while True:
         delay = SAMPLE_INTERVAL
         ticks += 1
-        if ticks % 30 == 0:  # tailscale names rarely change, refresh every ~30 min
+        if ticks % 30 == 0:  # every ~30 min
             await _refresh_ts_names()
+            await _fetch_forecast()  # keep the forecast fresh for autopilot
+        if ticks % 15 == 0:  # refresh the autopilot brain from backdata + forecast
+            await asyncio.to_thread(_recompute_ap_model)
         try:
+            eco = None
             async with _lock:
                 await _refresh()
                 row = _sample_row()
                 # In the lock: spot a setting changed on the remote/unit and log it,
                 # compared to the last known state.
                 _note_external_change()
+                # Auto eco: cool below the comfort ceiling, idle (off) when cool.
+                decision = _autopilot_decision()
+                if decision is not None:
+                    fields, reason = decision
+                    eco_before = _state()
+                    _mutate(Settings(**fields))
+                    await _apply()
+                    eco = (eco_before, _state(), reason)
             storage.insert(row)
+            if eco is not None:
+                _log_change("auto", "autopilot", eco[0], eco[1])
+                print(f"[info] autopilot: {eco[2]}")
             if _health["failures"]:
                 print(f"[info] AC reachable again after {_health['failures']} failure(s)")
             _health["last_ok"] = int(time.time())
@@ -319,6 +359,8 @@ async def _start_homekit(loop):
 async def lifespan(app: FastAPI):
     storage.init()
     await _refresh_ts_names()
+    await _fetch_forecast()  # so autopilot has the forecast from the first tick
+    await asyncio.to_thread(_recompute_ap_model)
     try:
         await _auth()
         await _prepare()
@@ -452,12 +494,98 @@ def _note_external_change() -> None:
         changes = [c for c in _diff(_last_state, cur)
                    if c["from"] is not None and c["to"] is not None]
         if changes:
+            global _last_manual_ts
+            _last_manual_ts = time.time()  # remote/app counts as manual
             try:
                 storage.log_command(int(time.time()), "externe", "externe", changes)
                 print(f"[info] external change (remote/app): {changes}")
             except Exception as e:
                 print(f"[warn] log external: {e}")
     _last_state = cur
+
+
+def _autopilot_decision() -> tuple[dict, str] | None:
+    # Decide the autopilot action, or None. The setpoint (consigne) is the ceiling.
+    # Cool when the room is above it, OR anticipating the forecast heat with a lead
+    # derived from the measured cooling capacity. Idle (off) when cool and no heat
+    # ahead. Only manages OFF <-> COOL; leaves HEAT/DRY/FAN/AUTO untouched. Backs off
+    # after a manual command.
+    if not _autopilot:
+        return None
+    if time.time() - _last_manual_ts < AP_PAUSE:
+        return None
+    indoor = device.indoor_temperature
+    ceiling = device.target_temperature
+    if indoor is None or ceiling is None:
+        return None
+    on = bool(device.power_state)
+    cooling = on and _label(device.operational_mode) == "COOL"
+    t_hot, _ = _predict_hot(ceiling)
+    now = time.time()
+    above = indoor >= ceiling + AP_HYST
+    anticipate = t_hot is not None and now >= t_hot - _ap_lead_seconds()
+    if not on:
+        if above:
+            return ({"power": True, "mode": "COOL"}, "room above setpoint")
+        if anticipate:
+            return ({"power": True, "mode": "COOL"}, "getting ahead of the heat")
+        return None
+    if cooling and not above and not anticipate and indoor <= ceiling:
+        return ({"power": False}, "cool enough, idling")
+    return None
+
+
+def _day_peak() -> tuple[float, float] | None:
+    # Highest bias-corrected forecast temp over the next 18h, and when, for the
+    # indicator ("35 at 15:00"), even beyond the decision lookahead.
+    now = time.time()
+    horizon = now + 18 * 3600
+    bias = _ap_model["bias"]
+    best = None
+    for f in _forecast_cache["data"]:
+        if now <= f["ts"] <= horizon:
+            t = f["temp"] - bias
+            if best is None or t > best[0]:
+                best = (t, f["ts"])
+    return best
+
+
+def _hhmm(ts: float) -> str:
+    return datetime.datetime.fromtimestamp(ts).strftime("%H:%M")
+
+
+def _autopilot_status() -> dict:
+    # What autopilot is doing and why, for the dashboard indicator. Mirrors the same
+    # above/anticipate signals as the decision, so the two never disagree.
+    if not _autopilot:
+        return {"on": False, "text": "off"}
+    now = time.time()
+    if now - _last_manual_ts < AP_PAUSE:
+        mins = int((AP_PAUSE - (now - _last_manual_ts)) / 60) + 1
+        return {"on": True, "text": f"paused (manual override), ~{mins} min left"}
+    indoor = device.indoor_temperature
+    ceiling = device.target_temperature
+    if indoor is None or ceiling is None:
+        return {"on": True, "text": "waiting for a reading"}
+    c = f"{ceiling:.0f}"
+    t_hot, _ = _predict_hot(ceiling)
+    lead = _ap_lead_seconds()
+    above = indoor >= ceiling + AP_HYST
+    anticipate = t_hot is not None and now >= t_hot - lead
+    dp = _day_peak()
+    coming = (f", {dp[0]:.0f}° at {_hhmm(dp[1])}"
+              if dp and dp[0] >= ceiling + AP_STAYON_MARGIN else "")
+    if above:
+        return {"on": True, "text": f"cooling, room above {c}°"}
+    if anticipate:
+        return {"on": True, "text": f"cooling to hold {c}°{coming}"}
+    if t_hot is not None:
+        mins = max(0, int((t_hot - lead - now) / 60))
+        return {"on": True, "text": f"idle, cooling in ~{mins} min{coming}"}
+    if coming:
+        return {"on": True, "text": f"idle, cool for now{coming}"}
+    return {"on": True, "text": "idle, cool enough"
+            + (f" (peak {dp[0]:.0f}°)" if dp else "")}
 
 
 # tailscale IP -> readable name. Filled at boot then refreshed periodically.
@@ -516,6 +644,9 @@ def _log_change(source: str, endpoint: str, before: dict, after: dict) -> None:
     changes = _diff(before, after)
     if not changes:
         return
+    if source != "auto":
+        global _last_manual_ts
+        _last_manual_ts = time.time()
     try:
         storage.log_command(int(time.time()), source, endpoint, changes)
     except Exception as e:
@@ -558,7 +689,7 @@ def _parse_fan(fan: str) -> AC.FanSpeed:
 async def status():
     async with _talking_to_ac():
         await _refresh()
-    return _state()
+    return {**_state(), "autopilot": _autopilot_status()}
 
 
 @app.get("/capabilities")
@@ -568,23 +699,35 @@ async def capabilities():
 
 @app.get("/config")
 async def config():
-    # Non-AC config for the dashboard. lat/lon drive the sun-height overlay.
+    # Non-AC config for the dashboard. lat/lon drive the sun overlay and forecast.
     return {"lat": AC_LAT, "lon": AC_LON}
+
+
+@app.post("/autopilot")
+async def set_autopilot(on: bool = Query(...)):
+    # Engage or disengage autopilot at runtime. Disengaging never changes the AC's
+    # current state, it just stops managing it.
+    global _autopilot
+    if on != _autopilot:
+        try:
+            storage.log_command(int(time.time()), "auto", "autopilot",
+                                [{"field": "autopilot", "from": _autopilot, "to": on}])
+        except Exception as e:
+            print(f"[warn] log_command: {e}")
+    _autopilot = on
+    print(f"[info] autopilot {'engaged' if on else 'disengaged'}")
+    return {"autopilot": _autopilot}
 
 
 _forecast_cache: dict = {"ts": 0.0, "data": []}
 
 
-@app.get("/forecast")
-async def forecast():
-    # Hourly outdoor temperature forecast from Open-Meteo (AROME by default).
-    # Cached ~30 min so we don't hammer their free API. Needs internet; if it fails
-    # we just return the last good data (or nothing).
+async def _fetch_forecast() -> None:
+    # Refresh the hourly outdoor temperature forecast from Open-Meteo (AROME by
+    # default). Needs internet; on failure the last good data is kept. Also used by
+    # autopilot, so the logger refreshes it even when no dashboard is open.
     if AC_LAT is None or AC_LON is None:
-        return {"forecast": []}
-    now = time.time()
-    if _forecast_cache["data"] and now - _forecast_cache["ts"] < 1800:
-        return {"forecast": _forecast_cache["data"], "model": AC_WX_MODEL}
+        return
     try:
         import httpx
         params = {"latitude": AC_LAT, "longitude": AC_LON, "hourly": "temperature_2m",
@@ -602,11 +745,85 @@ async def forecast():
             out.append({"ts": ts, "temp": temp})
         if out:
             _forecast_cache["data"] = out
-            _forecast_cache["ts"] = now
-        return {"forecast": _forecast_cache["data"], "model": AC_WX_MODEL}
+            _forecast_cache["ts"] = time.time()
     except Exception as e:
         print(f"[warn] forecast: {e}")
-        return {"forecast": _forecast_cache["data"], "model": AC_WX_MODEL}
+
+
+@app.get("/forecast")
+async def forecast():
+    if AC_LAT is None or AC_LON is None:
+        return {"forecast": []}
+    if not _forecast_cache["data"] or time.time() - _forecast_cache["ts"] >= 1800:
+        await _fetch_forecast()
+    return {"forecast": _forecast_cache["data"], "model": AC_WX_MODEL}
+
+
+def _forecast_bias() -> float:
+    # AROME's recent past-hours forecast minus the outdoor we actually measured,
+    # averaged. Positive = AROME runs warm. Subtracted from future temps to de-bias,
+    # so anticipation reacts to the real weather, not the model's error.
+    fc = _forecast_cache["data"]
+    if not fc:
+        return 0.0
+    now = time.time()
+    since = int(now - 6 * 3600)
+    meas = [(r["ts"], r["outdoor"]) for r in storage.history(since)
+            if r["outdoor"] is not None]
+    if not meas:
+        return 0.0
+    diffs = []
+    for f in fc:
+        if not since <= f["ts"] <= now:
+            continue
+        near = min(meas, key=lambda m: abs(m[0] - f["ts"]))
+        if abs(near[0] - f["ts"]) <= 1800:
+            diffs.append(f["temp"] - near[1])
+    return round(sum(diffs) / len(diffs), 2) if len(diffs) >= 2 else 0.0
+
+
+def _recompute_ap_model() -> None:
+    # Refresh the thermal rates (from backdata) and the forecast bias. Cheap enough
+    # every ~15 min; the per-tick decision reads this cache.
+    try:
+        rates = analysis.thermal_rates(storage.history(int(time.time() - 7 * 86400)))
+        _ap_model["warm_rate"] = rates["warm_rate"]
+        _ap_model["cool_rate"] = rates["cool_rate"]
+        _ap_model["cool_by_fan"] = rates["cool_by_fan"]
+        _ap_model["bias"] = _forecast_bias()
+        _ap_model["ts"] = time.time()
+    except Exception as e:
+        print(f"[warn] autopilot model: {e}")
+
+
+def _predict_hot(ceiling: float) -> tuple[float | None, float]:
+    # Earliest future time (epoch) at which the bias-corrected forecast outdoor
+    # reaches ceiling + STAYON_MARGIN (room would breach the ceiling), within
+    # LOOKAHEAD. Also returns the peak corrected temp over that window.
+    now = time.time()
+    horizon = now + AP_LOOKAHEAD * 3600
+    thr = ceiling + AP_STAYON_MARGIN
+    bias = _ap_model["bias"]
+    t_hot, peak = None, None
+    for f in _forecast_cache["data"]:
+        if not now <= f["ts"] <= horizon:
+            continue
+        temp = f["temp"] - bias
+        peak = temp if peak is None else max(peak, temp)
+        if t_hot is None and temp >= thr:
+            t_hot = f["ts"]
+    return t_hot, (peak if peak is not None else (device.outdoor_temperature or 0.0))
+
+
+def _ap_lead_seconds() -> float:
+    # How early to start cooling: time to take ~1C off, from the cooling capacity
+    # measured for the CURRENT fan speed (a quieter/lower fan cools more slowly), with
+    # fallbacks. A 1.5x safety margin covers slower configs (outdoor silent). Bounded.
+    fan = _label(device.fan_speed)
+    by_fan = _ap_model.get("cool_by_fan") or {}
+    cap = by_fan.get(fan) or _ap_model["cool_rate"] or -4.0
+    lead = 1.5 * 3600 / abs(cap)
+    return max(15 * 60, min(120 * 60, lead))
 
 
 class Settings(BaseModel):
@@ -884,6 +1101,10 @@ async def health():
         "last_error": _health["last_error"],
         "rediscoveries": _health["rediscoveries"],
         "device_ip": device.ip,
+        "autopilot": _autopilot,
+        "autopilot_paused": _autopilot and (now - _last_manual_ts) < AP_PAUSE,
+        "autopilot_model": {k: _ap_model[k] for k in
+                            ("warm_rate", "cool_rate", "cool_by_fan", "bias")},
         **storage.stats(),
     }
 

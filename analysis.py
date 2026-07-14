@@ -132,6 +132,51 @@ def response_curve(usable: list[dict], bin_width: float = 0.25) -> list[dict]:
     return out
 
 
+def thermal_rates(samples: list[dict]) -> dict:
+    # Room warming rate when the AC is off, and cooling rate when actively cooling,
+    # in C/h. Measured over SUSTAINED runs (>= 20 min), not sample to sample: the
+    # indoor sensor is quantized to 0.5C, so a single step over 60s reads as a
+    # nonsense ~30C/h. Used by autopilot to anticipate.
+    from statistics import median
+
+    def run_rates(keep) -> list[tuple]:
+        # (rate C/h, first sample of the run), for each sustained run.
+        out, run = [], []
+
+        def flush():
+            if len(run) >= 2:
+                dt = (run[-1]["ts"] - run[0]["ts"]) / 3600
+                dT = run[-1]["indoor"] - run[0]["indoor"]
+                if dt >= 0.33 and abs(dT) >= 0.5:  # >= 20 min and a real move
+                    out.append((dT / dt, run[0]))
+
+        for s in samples:
+            if s["indoor"] is None or not keep(s):
+                flush(); run.clear(); continue
+            if run and s["ts"] - run[-1]["ts"] > 300:  # gap breaks the run
+                flush(); run.clear()
+            run.append(s)
+        flush()
+        return out
+
+    # Warming: any off run that warmed. Cooling: only runs that pulled the room down
+    # by at least 1C (the capacity to cool, not the near-flat holding runs), and
+    # kept per fan speed, since a quieter/lower fan cools more slowly.
+    warm = [r for r, _ in run_rates(lambda s: not s["power"]) if r > 0]
+    cool = [(r, s) for r, s in run_rates(
+        lambda s: s["power"] and s.get("mode") == "COOL" and (s["watts"] or 0) > 60)
+        if r <= -1.0]
+    by_fan: dict = {}
+    for r, s in cool:
+        by_fan.setdefault(s.get("fan"), []).append(r)
+    return {
+        "warm_rate": round(median(warm), 2) if len(warm) >= 2 else None,   # +C/h
+        "cool_rate": round(median([r for r, _ in cool]), 2) if len(cool) >= 2 else None,
+        "cool_by_fan": {k: round(median(v), 2) for k, v in by_fan.items() if len(v) >= 2},
+        "n_warm": len(warm), "n_cool": len(cool),
+    }
+
+
 def analyse(samples: list[dict]) -> dict:
     # Anything not computable stays None, never 0.
     usable = [
