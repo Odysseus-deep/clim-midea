@@ -15,6 +15,7 @@ Run:
   .venv/bin/uvicorn ac_server:app --host 127.0.0.1 --port 8787
 """
 import asyncio
+import datetime
 import json
 import os
 import time
@@ -53,9 +54,12 @@ def _env_optfloat(name: str) -> float | None:
         return None
 
 
-# Location, only for the sun-height overlay on the temperature chart. Optional.
+# Location, for the sun-height overlay and the weather forecast. Optional.
 AC_LAT = _env_optfloat("AC_LAT")
 AC_LON = _env_optfloat("AC_LON")
+# Open-Meteo model for the forecast. AROME (Meteo-France, ~1.3km) is best over
+# France; set AC_WX_MODEL=best_match elsewhere.
+AC_WX_MODEL = os.environ.get("AC_WX_MODEL", "arome_france_hd")
 
 
 # Overridable via env, mostly to exercise failure recovery without waiting minutes.
@@ -566,6 +570,43 @@ async def capabilities():
 async def config():
     # Non-AC config for the dashboard. lat/lon drive the sun-height overlay.
     return {"lat": AC_LAT, "lon": AC_LON}
+
+
+_forecast_cache: dict = {"ts": 0.0, "data": []}
+
+
+@app.get("/forecast")
+async def forecast():
+    # Hourly outdoor temperature forecast from Open-Meteo (AROME by default).
+    # Cached ~30 min so we don't hammer their free API. Needs internet; if it fails
+    # we just return the last good data (or nothing).
+    if AC_LAT is None or AC_LON is None:
+        return {"forecast": []}
+    now = time.time()
+    if _forecast_cache["data"] and now - _forecast_cache["ts"] < 1800:
+        return {"forecast": _forecast_cache["data"], "model": AC_WX_MODEL}
+    try:
+        import httpx
+        params = {"latitude": AC_LAT, "longitude": AC_LON, "hourly": "temperature_2m",
+                  "models": AC_WX_MODEL, "forecast_days": 2, "timezone": "UTC"}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
+            j = r.json()
+        hourly = j.get("hourly", {})
+        out = []
+        for iso, temp in zip(hourly.get("time", []), hourly.get("temperature_2m", [])):
+            if temp is None:
+                continue
+            ts = int(datetime.datetime.fromisoformat(iso)
+                     .replace(tzinfo=datetime.timezone.utc).timestamp())
+            out.append({"ts": ts, "temp": temp})
+        if out:
+            _forecast_cache["data"] = out
+            _forecast_cache["ts"] = now
+        return {"forecast": _forecast_cache["data"], "model": AC_WX_MODEL}
+    except Exception as e:
+        print(f"[warn] forecast: {e}")
+        return {"forecast": _forecast_cache["data"], "model": AC_WX_MODEL}
 
 
 class Settings(BaseModel):

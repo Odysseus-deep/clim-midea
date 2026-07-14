@@ -281,6 +281,8 @@ const svgEl = (n, a = {}) => { const e = document.createElementNS("http://www.w3
 
 // Location for the sun-height overlay, from /config. null = no sun drawn.
 let geo = null;
+// Hourly outdoor temperature forecast (AROME by default), from /forecast.
+let forecast = [];
 
 // Solar elevation in degrees above the horizon, for a given epoch (ms) and place.
 // Low-precision NOAA formula: good to a fraction of a degree, no network needed.
@@ -352,11 +354,20 @@ function drawTemp() {
   const pts = samples.filter(s => s.indoor != null);
   if (pts.length < 2) { host.innerHTML = '<p class="empty">Not enough samples yet.</p>'; return; }
 
-  const [t0, t1] = xDomain();
-  const vals = pts.flatMap(s => [s.indoor, s.outdoor, s.target]).filter(v => v != null);
+  const [t0, tNow] = xDomain();
+  // Forecast: extend the axis a bit into the future and draw the outdoor forecast
+  // dashed. Only on the live view (not a drag zoom).
+  let tEnd = tNow, fc = [];
+  if (forecast.length && !customRange) {
+    const horizon = Math.min(16 * 3600, Math.max(3 * 3600, tNow - t0));
+    fc = forecast.filter(f => f.ts > tNow && f.ts <= tNow + horizon);
+    if (fc.length) tEnd = fc[fc.length - 1].ts;
+  }
+
+  const vals = pts.flatMap(s => [s.indoor, s.outdoor, s.target]).concat(fc.map(f => f.temp)).filter(v => v != null);
   const lo = Math.min(...vals) - 1, hi = Math.max(...vals) + 1;
-  const xs = scale(t0, t1, M.left, W - M.right), ys = scale(lo, hi, H - M.bottom, M.top);
-  const svg = frame(host, { xs, ys, xTicks: niceTicks(t0, t1, 5), yTicks: niceTicks(lo, hi, 5),
+  const xs = scale(t0, tEnd, M.left, W - M.right), ys = scale(lo, hi, H - M.bottom, M.top);
+  const svg = frame(host, { xs, ys, xTicks: niceTicks(t0, tEnd, 5), yTicks: niceTicks(lo, hi, 5),
     xFmt: xFmt(), yFmt: v => v.toFixed(0) + "°" });
 
   // Sun height as a golden background wash: brightness tracks the sun's elevation,
@@ -365,14 +376,33 @@ function drawTemp() {
   if (geo) {
     const NB = 120, plotH = H - M.bottom - M.top;
     for (let i = 0; i < NB; i++) {
-      const ta = t0 + (t1 - t0) * i / NB, tb = t0 + (t1 - t0) * (i + 1) / NB;
+      const ta = t0 + (tEnd - t0) * i / NB, tb = t0 + (tEnd - t0) * (i + 1) / NB;
       const e = sunElevation((ta + tb) / 2 * 1000, geo.lat, geo.lon);
       if (e <= 0) continue;
       svg.appendChild(svgEl("rect", { x: xs(ta), y: M.top, width: Math.max(0.5, xs(tb) - xs(ta)),
         height: plotH, fill: "#f2b134", opacity: 0.18 * Math.min(1, e / 65) }));
     }
-    $("#temp-desc").textContent = "The shaded area is the gap the AC has to bridge "
-      + "between the room and outside. The golden background is the sun's height.";
+  }
+  $("#temp-desc").textContent = "The shaded area is the gap the AC has to bridge between "
+    + "the room and outside."
+    + (geo ? " The golden background is the sun's height." : "")
+    + (fc.length ? " Dashed = outdoor forecast (AROME)." : "");
+
+  // Forecast: "now" divider, then the outdoor forecast dashed from the last sample.
+  if (fc.length) {
+    const nowX = xs(tNow);
+    svg.appendChild(svgEl("line", { class: "axis-line", x1: nowX, x2: nowX, y1: M.top, y2: H - M.bottom,
+      "stroke-dasharray": "2 3", opacity: 0.6 }));
+    const nl = svgEl("text", { class: "tick", x: nowX, y: M.top - 3, "text-anchor": "middle" });
+    nl.textContent = "now"; svg.appendChild(nl);
+    const lastOut = [...pts].reverse().find(s => s.outdoor != null);
+    const chain = (lastOut ? [{ ts: lastOut.ts, temp: lastOut.outdoor }] : []).concat(fc);
+    svg.appendChild(svgEl("path", {
+      d: chain.map((f, i) => (i ? "L" : "M") + xs(f.ts) + "," + ys(f.temp)).join(" "),
+      class: "series", stroke: "var(--outdoor)", "stroke-dasharray": "5 4", opacity: 0.85 }));
+    const fl = fc[fc.length - 1];
+    const e = svgEl("text", { class: "dlabel", x: xs(fl.ts) - 2, y: ys(fl.temp) - 6, fill: "var(--outdoor)", "text-anchor": "end" });
+    e.textContent = fl.temp.toFixed(0) + "°"; svg.appendChild(e);
   }
 
   // Area between the two curves: the gap the AC fights.
@@ -959,10 +989,21 @@ $("#filters").addEventListener("click", (e) => {
 window.addEventListener("resize", () => { drawTemp(); drawPower(); drawHyst(); });
 
 if (customRange) $("#zoom-reset").style.display = "";  // opened via a #zoom link
-// Sun overlay: only if the server has a location configured.
+// Sun overlay + weather forecast: only if the server has a location configured.
+function loadForecast() {
+  fetch("/forecast").then(r => r.json()).then(f => {
+    forecast = f.forecast || [];
+    if (samples.length) drawTemp();
+  }).catch(() => {});
+}
 fetch("/config").then(r => r.json()).then(c => {
-  if (c && c.lat != null && c.lon != null) { geo = c; if (samples.length) drawTemp(); }
+  if (c && c.lat != null && c.lon != null) {
+    geo = c;
+    if (samples.length) drawTemp();
+    loadForecast();
+  }
 }).catch(() => {});
+setInterval(loadForecast, 30 * 60 * 1000);  // forecast refresh, server-cached anyway
 refreshState();
 load();
 loadCommands();

@@ -38,6 +38,9 @@ Tailscale, no cloud involved.
 - HomeKit: shows up in the Home app, works with Siri, shareable with the household.
 - Resilient: survives the AC being unplugged, the router rebooting, or the IP
   changing (auto re-discovery). Never records phantom samples.
+- The temperature chart shades the background by the sun's height (computed, no
+  API) and can extend the outdoor curve with a weather forecast (Open-Meteo, AROME
+  by default), so you can see the heat coming.
 
 The hysteresis view aggregates power by distance from setpoint, so it stays readable
 over any span. On an inverter that modulates, the cooling and warming branches
