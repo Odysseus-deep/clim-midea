@@ -74,12 +74,14 @@ AP_HYST = _env_float("AC_AP_HYST", 0.5)       # room must exceed setpoint by thi
 AP_STAYON_MARGIN = _env_float("AC_AP_STAYON_MARGIN", 3.0)
 AP_LOOKAHEAD = _env_float("AC_AP_LOOKAHEAD", 4.0)
 
-# The unit's return-air sensor reads colder than the occupied room: it sits in the
-# recirculated, partly cooled airflow near the coil. A room thermometer here read
-# 1.4C above what the AC reported. This offset is added to the sensor for the
-# autopilot decision and the displayed room temperature, so the room is held at the
-# real ceiling, not the sensor's. It is NOT written to the logged sample (kept raw)
-# and does not affect the thermal rates, which are differences where it cancels.
+# Optional calibration for a return-air sensor that reads off the occupied room (some
+# sit in the recirculated, partly cooled airflow near the coil). Added to the sensor
+# for the autopilot decision and the displayed room temperature, so the room is held
+# at the real ceiling. NOT written to the logged sample (kept raw) and cancels in the
+# thermal rates (differences). Default 0: on this unit a Fluke thermocouple matched
+# the sensor to within its 0.5C quantization, so no correction is needed. Measure your
+# own gap with a stabilized air probe before setting this; surfaces and cheap
+# thermometers mislead (a wood surface lags the actively cooled air and reads warm).
 AC_INDOOR_OFFSET = _env_float("AC_INDOOR_OFFSET", 0.0)
 
 # Runtime state, toggleable via /autopilot. Starts from the env default.
