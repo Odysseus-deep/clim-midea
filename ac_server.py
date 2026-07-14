@@ -74,6 +74,14 @@ AP_HYST = _env_float("AC_AP_HYST", 0.5)       # room must exceed setpoint by thi
 AP_STAYON_MARGIN = _env_float("AC_AP_STAYON_MARGIN", 3.0)
 AP_LOOKAHEAD = _env_float("AC_AP_LOOKAHEAD", 4.0)
 
+# The unit's return-air sensor reads colder than the occupied room: it sits in the
+# recirculated, partly cooled airflow near the coil. A room thermometer here read
+# 1.4C above what the AC reported. This offset is added to the sensor for the
+# autopilot decision and the displayed room temperature, so the room is held at the
+# real ceiling, not the sensor's. It is NOT written to the logged sample (kept raw)
+# and does not affect the thermal rates, which are differences where it cancels.
+AC_INDOOR_OFFSET = _env_float("AC_INDOOR_OFFSET", 0.0)
+
 # Runtime state, toggleable via /autopilot. Starts from the env default.
 _autopilot = os.environ.get("AC_AUTOPILOT", "0") in ("1", "true", "yes")
 
@@ -421,12 +429,22 @@ def _label(value) -> str:
     return getattr(value, "name", str(value))
 
 
+def _room_temp() -> float | None:
+    # Calibrated room temperature: the sensor plus AC_INDOOR_OFFSET (see above). None
+    # if the sensor has no reading. This is what the autopilot and the UI should use;
+    # the raw sensor is only for the logged sample.
+    t = device.indoor_temperature
+    return None if t is None else round(t + AC_INDOOR_OFFSET, 1)
+
+
 def _state() -> dict:
     return {
         "power": device.power_state,
         "mode": _label(device.operational_mode),
         "target": device.target_temperature,
-        "indoor": device.indoor_temperature,
+        "indoor": _room_temp(),
+        "indoor_raw": device.indoor_temperature,
+        "indoor_offset": AC_INDOOR_OFFSET,
         "outdoor": device.outdoor_temperature,
         "fan": _label(device.fan_speed),
         "swing": _label(device.swing_mode),
@@ -514,7 +532,7 @@ def _autopilot_decision() -> tuple[dict, str] | None:
         return None
     if time.time() - _last_manual_ts < AP_PAUSE:
         return None
-    indoor = device.indoor_temperature
+    indoor = _room_temp()
     ceiling = device.target_temperature
     if indoor is None or ceiling is None:
         return None
@@ -563,7 +581,7 @@ def _autopilot_status() -> dict:
     if now - _last_manual_ts < AP_PAUSE:
         mins = int((AP_PAUSE - (now - _last_manual_ts)) / 60) + 1
         return {"on": True, "text": f"paused (manual override), ~{mins} min left"}
-    indoor = device.indoor_temperature
+    indoor = _room_temp()
     ceiling = device.target_temperature
     if indoor is None or ceiling is None:
         return {"on": True, "text": "waiting for a reading"}
@@ -699,8 +717,9 @@ async def capabilities():
 
 @app.get("/config")
 async def config():
-    # Non-AC config for the dashboard. lat/lon drive the sun overlay and forecast.
-    return {"lat": AC_LAT, "lon": AC_LON}
+    # Non-AC config for the dashboard. lat/lon drive the sun overlay and forecast;
+    # indoor_offset shifts the logged (raw) indoor curve to the calibrated room temp.
+    return {"lat": AC_LAT, "lon": AC_LON, "indoor_offset": AC_INDOOR_OFFSET}
 
 
 @app.post("/autopilot")
@@ -1160,12 +1179,13 @@ async def say():
     # Short sentence, for Siri to read out.
     async with _talking_to_ac():
         await _refresh()
+    room = _room_temp()
     if not device.power_state:
-        return f"The AC is off. It is {device.indoor_temperature:.0f} degrees."
+        return f"The AC is off. It is {room:.0f} degrees."
     mode = _label(device.operational_mode)
     return (
         f"The AC is on in {_MODE_SAY.get(mode, mode.lower())} mode, "
         f"set to {device.target_temperature:.0f} degrees. "
-        f"It is {device.indoor_temperature:.0f} inside, "
+        f"It is {room:.0f} inside, "
         f"{device.outdoor_temperature:.0f} outside."
     )

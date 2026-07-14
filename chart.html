@@ -269,6 +269,10 @@ const W = 900, H = 240, M = { top: 14, right: 52, bottom: 28, left: 44 };
 const $ = (s) => document.querySelector(s);
 const tooltip = $("#tooltip");
 let hours = 24, samples = [], hyst = null;
+// Room temperature is the raw sensor plus this offset (from /config). The AC's sensor
+// reads colder than the occupied room, so the logged (raw) curve is shifted up to the
+// real room temp. Hysteresis stays raw: it describes the AC's own control loop.
+let indoorOffset = 0;
 
 const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 const fmtDate = (ts) => new Date(ts * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -974,7 +978,10 @@ async function load() {
       fetch(`/history?${q}`).then(r => r.json()),
       fetch(`/hysteresis?${q}`).then(r => r.json()),
     ]);
-    samples = h.samples; hyst = y;
+    samples = indoorOffset
+      ? h.samples.map(s => s.indoor == null ? s : { ...s, indoor: +(s.indoor + indoorOffset).toFixed(1) })
+      : h.samples;
+    hyst = y;
     if (customRange) {
       [, windowEnd] = customRange;  // the axis matches the selection
     } else {
@@ -1020,7 +1027,9 @@ $("#ap-toggle").onclick = async () => {
 };
 
 fetch("/config").then(r => r.json()).then(c => {
-  if (c && c.lat != null && c.lon != null) {
+  if (!c) return;
+  if (c.indoor_offset) { indoorOffset = c.indoor_offset; load(); }  // reload: shift the curve
+  if (c.lat != null && c.lon != null) {
     geo = c;
     if (samples.length) drawTemp();
     loadForecast();
